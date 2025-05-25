@@ -1,133 +1,195 @@
 # .github/workflows/dice_roll_commit.yml
+# S+ Grade: Hybrid approach for Dice Roll Hourly Commit
+# This workflow combines explicit evaluation steps with centralized configuration
+# for enhanced clarity, maintainability, and robustness.
+
 name: Dice Roll Hourly Commit
 
 on:
   schedule:
-    # Run at the start of every hour (minute 0)
+    # Run at the start of every hour (minute 0).
+    # Cron syntax: minute hour day(month) month day(week)
     - cron: '0 * * * *'
-  workflow_dispatch: # Allows manual triggering for testing
+  workflow_dispatch: # Allows manual triggering from the Actions tab for testing or ad-hoc runs.
 
-# Concurrency control: ensure only one instance of this workflow for this branch runs at a time.
-# If a new run is triggered while an old one is active for the same ref, the old one is cancelled.
+# Concurrency control:
+# Ensures only one instance of this workflow for a given branch (ref) runs at a time.
+# If a new run is triggered (e.g., by schedule or push) while an old one is active
+# for the same ref, 'cancel-in-progress: true' will cancel the older, running instance.
+# This is often desirable for CI/CD to operate on the latest state.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }} # Group by workflow name and branch/tag reference
   cancel-in-progress: true
 
 jobs:
   dice-roll-and-commit:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # Necessary for GITHUB_TOKEN to push to the repo
+    runs-on: ubuntu-latest # Use the latest stable Ubuntu runner provided by GitHub.
+    
+    permissions: # Define permissions granted to the GITHUB_TOKEN for this job.
+      contents: write # 'write' permission for 'contents' is necessary for the action to push commits.
+
+    # Environment variables available to all steps in this job.
+    # Centralizes configuration for easier updates and better readability.
+    env:
+      TARGET_FILENAME: "dice_roll_log.txt"         # Filename for the script to update.
+      PYTHON_VERSION: '3.11'                      # Preferred Python version.
+      # --- Personal Git Author Details ---
+      # Ensure GIT_AUTHOR_EMAIL is a verified email on your GitHub account for commit attribution.
+      GIT_AUTHOR_NAME: "Sabbir Hossain"
+      GIT_AUTHOR_EMAIL: "hossain.sabbir17@gmail.com"
 
     steps:
+      # Step 1: Checkout Repository
+      # Fetches the repository content onto the runner.
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4 # Use the latest major version of the checkout action.
         with:
-          fetch-depth: 0 # Fetch all history, good for rebasing
+          # 'fetch-depth: 0' fetches all history for all branches and tags.
+          # This is crucial for operations like 'git pull --rebase' to function correctly
+          # as they might need access to commit history beyond a shallow clone.
+          fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      # Step 2: Set up Python Environment
+      # Configures the specified Python version on the runner.
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5 # Use the latest major version of the setup-python action.
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip' # Enable caching for pip dependencies (though none are installed here, good practice).
 
-      - name: Install Python dependencies (if any, none for this simple script)
+      # Step 3: Install Python Dependencies (if any)
+      # For this script, only standard libraries are used, so no external dependencies.
+      # This step is included as a placeholder and for best practice.
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          # No external libraries needed for dice_roll_committer.py beyond standard lib
+          # If 'requirements.txt' existed, you'd run:
+          # pip install -r requirements.txt
+          echo "No external Python dependencies to install for this script."
 
+      # Step 4: Execute Dice Roll Committer Script
+      # Runs the Python script that decides if a commit should be made and updates the target file.
       - name: Run Dice Roll Committer script
-        id: dice_roll_script # Give an ID to access its outcome
+        id: dice_roll_script # Assign an ID to this step to reference its 'outcome' later.
         run: python dice_roll_committer.py
-        # The script will exit with:
-        # 0: if changes were made and commit should happen
-        # 1: if an error occurred
-        # 2: if no changes were made (decision was not to commit)
-        continue-on-error: true # Allow workflow to continue to check exit code
+        # The Python script ('dice_roll_committer.py') is expected to exit with:
+        # - 0: If it decided to commit AND successfully updated TARGET_FILENAME.
+        # - 1: If an error occurred within the Python script.
+        # - 2: If it decided NOT to commit (TARGET_FILENAME was not updated).
+        # 'continue-on-error: true' allows the workflow to proceed to the next step
+        # even if this script exits non-zero, so we can explicitly handle its outcome.
+        continue-on-error: true
 
+      # Step 5: Evaluate Python Script Outcome
+      # Determines the course of action based on the Python script's execution result.
+      # Sets an output 'proceed_to_commit' which simplifies conditional logic in subsequent steps.
       - name: Evaluate script outcome
-        id: script_evaluation
+        id: script_evaluation # Assign an ID to reference its 'outputs' later.
         run: |
-          echo "Python script exited with code: ${{ steps.dice_roll_script.outcome }}"
-          if [[ "${{ steps.dice_roll_script.outcome }}" == "success" ]]; then # Corresponds to exit code 0
-            echo "Script recommends commit."
+          # 'steps.dice_roll_script.outcome' can be 'success', 'failure', or 'skipped'.
+          # 'success' maps to exit code 0. 'failure' maps to any non-zero exit code from the script.
+          # Note: 'steps.dice_roll_script.conclusion' would be more granular if script explicitly set it,
+          # but 'outcome' is sufficient here for differentiating success (0) vs. non-success (non-0).
+          
+          echo "Python script run outcome: ${{ steps.dice_roll_script.outcome }}"
+          # Accessing the raw exit code if needed (more complex to wire up directly in shell if block):
+          # echo "Python script raw exit code (if accessible via other means): [usually not directly exposed without custom handling]"
+
+          if [[ "${{ steps.dice_roll_script.outcome }}" == "success" ]]; then # Python script exited with 0
+            echo "Script indicated success (exit 0): Commit process will proceed if file changed."
             echo "proceed_to_commit=true" >> $GITHUB_OUTPUT
-          elif [[ "${{ steps.dice_roll_script.outcome }}" == "neutral" ]]; then # Corresponds to exit code 2
-            echo "Script recommends NO commit."
+          else # Python script exited non-zero (e.g., 1 for error, 2 for no commit decision)
+            echo "Script indicated non-success (exit non-0) or was skipped."
+            echo "Reason (from Python logs): See logs from 'Run Dice Roll Committer script' step."
+            echo "Commit process will NOT proceed."
             echo "proceed_to_commit=false" >> $GITHUB_OUTPUT
-          else # Corresponds to exit code 1 or other failures
-            echo "Script failed or indicated an error. Aborting commit."
-            echo "proceed_to_commit=false" >> $GITHUB_OUTPUT
-            # Optionally, make the job fail explicitly here if script error is critical
-            # exit 1
           fi
 
-      # This 'Check for file changes' step is still useful as a safeguard,
-      # ensuring we only commit if the target file actually changed.
-      # The Python script should only modify the file if proceed_to_commit is true.
-      - name: Check for file changes (Safety Net)
+      # Step 6: Check for File Content Changes (Safety Net)
+      # Verifies that the target file was actually modified by the Python script if a commit is recommended.
+      # This step only runs if the script evaluation indicated a potential commit.
+      - name: Check for file changes in ${{ env.TARGET_FILENAME }}
         if: steps.script_evaluation.outputs.proceed_to_commit == 'true'
-        id: git_diff
+        id: git_diff # Assign an ID to reference its 'outputs' later.
         run: |
+          # 'git diff --quiet --exit-code' exits 0 if no changes, 1 if changes are found.
           if git diff --quiet --exit-code ${{ env.TARGET_FILENAME }}; then
-            echo "No content changes in ${{ env.TARGET_FILENAME }} despite script recommending commit. This is unexpected."
+            echo "No content changes detected in ${{ env.TARGET_FILENAME }}."
+            echo "This is unexpected if script recommended a commit (exit 0)."
             echo "changed=false" >> $GITHUB_OUTPUT
           else
             echo "Content changes detected in ${{ env.TARGET_FILENAME }} as expected."
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
-        env:
-          TARGET_FILENAME: dice_roll_log.txt # Make filename accessible
-        continue-on-error: true # If diff exits 1 (changes found), that's not an error for this step
+        # 'continue-on-error: true' is crucial because 'git diff' exits 1 if changes are found.
+        # We don't want this to mark the step as failed; finding changes is the desired outcome here.
+        continue-on-error: true
 
+      # Step 7: Configure Git User
+      # Sets the Git author and committer information for the commit.
+      # Only runs if a commit is intended AND file changes were detected.
       - name: Configure Git User for commit
-        # Only configure if script recommended commit AND git_diff confirmed changes
         if: steps.script_evaluation.outputs.proceed_to_commit == 'true' && steps.git_diff.outputs.changed == 'true'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "${{ env.GIT_AUTHOR_NAME }}"
+          git config --local user.email "${{ env.GIT_AUTHOR_EMAIL }}"
+          echo "Git user configured for this commit: ${{ env.GIT_AUTHOR_NAME }} <${{ env.GIT_AUTHOR_EMAIL }}>"
 
-      - name: Commit and push if changes exist and script approved
-        # Only commit if script recommended AND git_diff confirmed changes
+      # Step 8: Commit and Push Changes
+      # Stages, commits, and pushes the modified file if all conditions are met.
+      - name: Commit and push changes for ${{ env.TARGET_FILENAME }}
         if: steps.script_evaluation.outputs.proceed_to_commit == 'true' && steps.git_diff.outputs.changed == 'true'
         run: |
-          echo "Adding, committing, and pushing ${{ env.TARGET_FILENAME }}."
+          echo "Attempting to add, commit, and push changes to ${{ env.TARGET_FILENAME }}."
           git add ${{ env.TARGET_FILENAME }}
 
-          COMMIT_TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          git commit -m "Dice roll log update: ${COMMIT_TIMESTAMP}"
+          COMMIT_TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC") # UTC timestamp for the commit message.
+          # Explicitly set the commit author using the --author flag.
+          # The 'git config' in the previous step sets the committer.
+          git commit --author="${{ env.GIT_AUTHOR_NAME }} <${{ env.GIT_AUTHOR_EMAIL }}>" -m "Dice roll log update: ${COMMIT_TIMESTAMP}"
+          echo "Commit created with author '${{ env.GIT_AUTHOR_NAME }} <${{ env.GIT_AUTHOR_EMAIL }}>'."
 
-          echo "Attempting to pull latest changes with rebase before pushing..."
-          if ! git pull --rebase origin ${{ github.ref_name }}; then # Use github.ref_name for current branch
-              echo "CRITICAL: 'git pull --rebase' failed. Aborting push."
-              exit 1
+          # Before pushing, pull remote changes with rebase to avoid push conflicts
+          # if the remote branch was updated since this job started.
+          echo "Attempting to synchronize with remote branch '${{ github.ref_name }}' using pull --rebase..."
+          # 'github.ref_name' provides the name of the current branch (e.g., 'main').
+          if ! git pull --rebase origin ${{ github.ref_name }}; then
+              echo "CRITICAL: 'git pull --rebase origin ${{ github.ref_name }}' failed."
+              echo "This could be due to complex merge conflicts. Manual intervention may be required."
+              exit 1 # Fail the step and job.
           fi
-          echo "Pull --rebase successful or branch up-to-date."
+          echo "Synchronization with remote branch successful or branch was already up-to-date."
 
+          # Retry logic for 'git push' to handle transient network issues or brief repository lock contention.
           for i in 1 2 3; do
             echo "Push attempt #$i..."
-            if git push; then
-              echo "Push successful!"
-              break
+            if git push origin ${{ github.ref_name }}; then # Explicitly push to origin and the current branch
+              echo "Push successful on attempt #$i!"
+              break # Exit loop on successful push.
             fi
-            if [ $i -lt 3 ]; then
+            if [ $i -lt 3 ]; then # If not the last attempt
               echo "Push attempt #$i failed. Retrying in 20 seconds..."
-              sleep 20
+              sleep 20 # Wait before retrying.
             else
               echo "CRITICAL: All push attempts failed after $i retries."
-              exit 1
+              echo "Manual intervention may be required to push changes."
+              exit 1 # Fail the step and job if all pushes fail.
             fi
           done
-        env:
-          TARGET_FILENAME: dice_roll_log.txt
+          echo "Commit and push process completed for ${{ env.TARGET_FILENAME }}."
 
-      - name: No commit needed or script error
-        if: steps.script_evaluation.outputs.proceed_to_commit != 'true' || steps.git_diff.outputs.changed != 'true'
+      # Step 9: Handle "No Commit" Scenario or Script Errors
+      # Provides a clear log message if no commit was made due to script decision,
+      # script error, or no actual file changes.
+      - name: Report if no commit action was taken
+        # This 'if' condition captures all scenarios where a commit should NOT happen.
+        if: steps.script_evaluation.outputs.proceed_to_commit != 'true' || (steps.script_evaluation.outputs.proceed_to_commit == 'true' && steps.git_diff.outputs.changed != 'true')
         run: |
-          echo "No commit will be made."
+          echo "No commit action was performed for ${{ env.TARGET_FILENAME }}."
           if [[ "${{ steps.script_evaluation.outputs.proceed_to_commit }}" != "true" ]]; then
-            echo "Reason: Script did not recommend a commit (exit code ${{ steps.dice_roll_script.outcome }})."
+            echo "Reason: Python script outcome was '${{ steps.dice_roll_script.outcome }}' (did not recommend commit or script error)."
+            echo "Refer to 'Run Dice Roll Committer script' step logs for details from Python."
           elif [[ "${{ steps.git_diff.outputs.changed }}" != "true" ]]; then
-            echo "Reason: Script recommended commit, but git_diff found no changes in ${{ env.TARGET_FILENAME }}."
+            # This case: script recommended commit, but no file changes were found.
+            echo "Reason: Script recommended commit, but 'Check for file changes' step found no modifications to ${{ env.TARGET_FILENAME }}."
           fi
-        env:
-          TARGET_FILENAME: dice_roll_log.txt
