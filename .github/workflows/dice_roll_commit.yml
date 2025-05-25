@@ -1,5 +1,4 @@
 # .github/workflows/dice_roll_commit.yml
-# S+ Grade: Hybrid approach for Dice Roll Hourly Commit
 # This workflow combines explicit evaluation steps with centralized configuration
 # for enhanced clarity, maintainability, and robustness.
 
