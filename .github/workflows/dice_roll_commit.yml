@@ -48,13 +48,13 @@ jobs:
           # as they might need access to commit history beyond a shallow clone.
           fetch-depth: 0
 
-      # Step 2: Set up Python Environment
+            # Step 2: Set up Python Environment
       # Configures the specified Python version on the runner.
       - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5 # Use the latest major version of the setup-python action.
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip' # Enable caching for pip dependencies (though none are installed here, good practice).
+          # cache: 'pip' # REMOVE OR COMMENT OUT THIS LINE - no pip dependencies to cache
 
       # Step 3: Install Python Dependencies (if any)
       # For this script, only standard libraries are used, so no external dependencies.
