@@ -70,12 +70,16 @@ jobs:
           if [[ "${{ steps.dice_roll_script.outcome }}" == "success" ]]; then
             echo "✅ Script recommended a commit. Proceeding to commit steps."
             echo "should_commit=true" >> $GITHUB_OUTPUT
-            # Read the generated commit message from the file into an output variable.
-            # This is a robust way to pass multi-line strings between steps.
-            # We use a heredoc to handle multi-line content safely.
-            echo 'commit_message<<EOF' >> $GITHUB_OUTPUT
-            cat ${{ env.COMMIT_MSG_FILENAME }} >> $GITHUB_OUTPUT
-            echo 'EOF' >> $GITHUB_OUTPUT
+
+            # --- THE FIX ---
+            # Instead of using 'cat' directly, read the file's content into a shell
+            # variable first. Then, echo that variable into the heredoc.
+            # This is more robust and prevents issues with missing newlines at the end of the file.
+            COMMIT_MSG_CONTENT=$(cat ${{ env.COMMIT_MSG_FILENAME }})
+            echo "commit_message<<EOF" >> $GITHUB_OUTPUT
+            echo "$COMMIT_MSG_CONTENT" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            
           else
             echo "❌ Script did not recommend a commit or an error occurred. Skipping commit steps."
             echo "should_commit=false" >> $GITHUB_OUTPUT
