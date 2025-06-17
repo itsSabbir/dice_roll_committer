@@ -78,7 +78,7 @@ Trigger Reason: Success on even hour 4 UTC.
 
 The system operates through a clear, orchestrated sequence of events. This diagram illustrates the interaction between the different components of the system.
 
-```mermaid
+```
 graph TD
     A[GitHub Actions Scheduler] --triggers every hour--> B{Workflow Run};
     B --starts job--> C[1. Checkout Repository];
