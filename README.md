@@ -8,8 +8,6 @@
 
 A fully autonomous system that leverages Python and GitHub Actions to introduce repository activity based on a configurable, time-aware, probabilistic model.
 
-\</div\>
-
 -----
 
 ## 📖 Table of Contents
