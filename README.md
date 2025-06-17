@@ -140,4 +140,3 @@ Pull requests and ideas are welcome! If you have feature suggestions (e.g., day-
 Developed and maintained by [Sabbir Hossain](https://github.com/itsSabbir).  
 If you enjoy this project, give it a ⭐ and follow for more automations!
 
-
