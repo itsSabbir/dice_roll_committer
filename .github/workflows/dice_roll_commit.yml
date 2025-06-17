@@ -1,194 +1,176 @@
 # .github/workflows/dice_roll_commit.yml
-# This workflow combines explicit evaluation steps with centralized configuration
-# for enhanced clarity, maintainability, and robustness.
-
-name: Dice Roll Hourly Commit
+name: Hourly Dice Roll Commit
 
 on:
   schedule:
-    # Run at the start of every hour (minute 0).
-    # Cron syntax: minute hour day(month) month day(week)
+    # Run at the start of every hour.
     - cron: '0 * * * *'
-  workflow_dispatch: # Allows manual triggering from the Actions tab for testing or ad-hoc runs.
+  workflow_dispatch: # Allows manual triggering for testing.
 
-# Concurrency control:
-# Ensures only one instance of this workflow for a given branch (ref) runs at a time.
-# If a new run is triggered (e.g., by schedule or push) while an old one is active
-# for the same ref, 'cancel-in-progress: true' will cancel the older, running instance.
-# This is often desirable for CI/CD to operate on the latest state.
+# Concurrency control is critical for scheduled workflows to prevent race conditions.
+# This ensures only one instance of the workflow runs at a time for a given branch.
+# 'cancel-in-progress: true' will cancel any older, still-running instance.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }} # Group by workflow name and branch/tag reference
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   dice-roll-and-commit:
-    runs-on: ubuntu-latest # Use the latest stable Ubuntu runner provided by GitHub.
+    runs-on: ubuntu-latest
     
-    permissions: # Define permissions granted to the GITHUB_TOKEN for this job.
-      contents: write # 'write' permission for 'contents' is necessary for the action to push commits.
+    # Define permissions explicitly. 'contents: write' is for pushing commits,
+    # and 'actions: write' can be used for more advanced interactions if needed.
+    permissions:
+      contents: write
 
-    # Environment variables available to all steps in this job.
-    # Centralizes configuration for easier updates and better readability.
+    # Centralize configuration in the 'env' block for maintainability.
     env:
-      TARGET_FILENAME: "dice_roll_log.txt"         # Filename for the script to update.
-      PYTHON_VERSION: '3.11'                      # Preferred Python version.
-      # --- Personal Git Author Details ---
-      # Ensure GIT_AUTHOR_EMAIL is a verified email on your GitHub account for commit attribution.
+      PYTHON_VERSION: '3.11'
       GIT_AUTHOR_NAME: "Sabbir Hossain"
       GIT_AUTHOR_EMAIL: "hossain.sabbir17@gmail.com"
+      LOG_FILENAME: "dice_roll_log.txt"
+      COMMIT_MSG_FILENAME: "commit_message.txt"
 
     steps:
       # Step 1: Checkout Repository
-      # Fetches the repository content onto the runner.
-      - name: Checkout repository
-        uses: actions/checkout@v4 # Use the latest major version of the checkout action.
+      # 'fetch-depth: 0' is crucial here. It fetches the entire git history, which is
+      # necessary for 'git pull --rebase' to work correctly and avoid conflicts.
+      # A shallow clone (the default) can cause rebasing to fail.
+      - name: 1. Checkout repository with full history
+        uses: actions/checkout@v4
         with:
-          # 'fetch-depth: 0' fetches all history for all branches and tags.
-          # This is crucial for operations like 'git pull --rebase' to function correctly
-          # as they might need access to commit history beyond a shallow clone.
           fetch-depth: 0
 
-            # Step 2: Set up Python Environment
-      # Configures the specified Python version on the runner.
-      - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5 # Use the latest major version of the setup-python action.
+      # Step 2: Set up Python Environment
+      - name: 2. Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          # cache: 'pip' # REMOVE OR COMMENT OUT THIS LINE - no pip dependencies to cache
 
-      # Step 3: Install Python Dependencies (if any)
-      # For this script, only standard libraries are used, so no external dependencies.
-      # This step is included as a placeholder and for best practice.
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          # If 'requirements.txt' existed, you'd run:
-          # pip install -r requirements.txt
-          echo "No external Python dependencies to install for this script."
-
-      # Step 4: Execute Dice Roll Committer Script
-      # Runs the Python script that decides if a commit should be made and updates the target file.
-      - name: Run Dice Roll Committer script
-        id: dice_roll_script # Assign an ID to this step to reference its 'outcome' later.
+      # Step 3: Execute Dice Roll Committer Script
+      # This is the core decision-making step. The Python script will exit with:
+      # - 0: If a commit is recommended.
+      # - 1: On a critical error.
+      # - 2: If no commit was decided (clean exit).
+      # We use 'continue-on-error: true' to allow the workflow to proceed regardless
+      # of the exit code, so we can analyze the outcome in the next steps.
+      - name: 3. Run Dice Roll Committer script
+        id: dice_roll_script
         run: python dice_roll_committer.py
-        # The Python script ('dice_roll_committer.py') is expected to exit with:
-        # - 0: If it decided to commit AND successfully updated TARGET_FILENAME.
-        # - 1: If an error occurred within the Python script.
-        # - 2: If it decided NOT to commit (TARGET_FILENAME was not updated).
-        # 'continue-on-error: true' allows the workflow to proceed to the next step
-        # even if this script exits non-zero, so we can explicitly handle its outcome.
         continue-on-error: true
 
-      # Step 5: Evaluate Python Script Outcome
-      # Determines the course of action based on the Python script's execution result.
-      # Sets an output 'proceed_to_commit' which simplifies conditional logic in subsequent steps.
-      - name: Evaluate script outcome
-        id: script_evaluation # Assign an ID to reference its 'outputs' later.
+      # Step 4: Evaluate Script Outcome and Prepare for Commit
+      # This step acts as a router based on the script's exit code.
+      # It sets outputs that control whether the subsequent commit steps run.
+      - name: 4. Evaluate script outcome
+        id: evaluation
         run: |
-          # 'steps.dice_roll_script.outcome' can be 'success', 'failure', or 'skipped'.
-          # 'success' maps to exit code 0. 'failure' maps to any non-zero exit code from the script.
-          # Note: 'steps.dice_roll_script.conclusion' would be more granular if script explicitly set it,
-          # but 'outcome' is sufficient here for differentiating success (0) vs. non-success (non-0).
-          
-          echo "Python script run outcome: ${{ steps.dice_roll_script.outcome }}"
-          # Accessing the raw exit code if needed (more complex to wire up directly in shell if block):
-          # echo "Python script raw exit code (if accessible via other means): [usually not directly exposed without custom handling]"
-
-          if [[ "${{ steps.dice_roll_script.outcome }}" == "success" ]]; then # Python script exited with 0
-            echo "Script indicated success (exit 0): Commit process will proceed if file changed."
-            echo "proceed_to_commit=true" >> $GITHUB_OUTPUT
-          else # Python script exited non-zero (e.g., 1 for error, 2 for no commit decision)
-            echo "Script indicated non-success (exit non-0) or was skipped."
-            echo "Reason (from Python logs): See logs from 'Run Dice Roll Committer script' step."
-            echo "Commit process will NOT proceed."
-            echo "proceed_to_commit=false" >> $GITHUB_OUTPUT
-          fi
-
-      # Step 6: Check for File Content Changes (Safety Net)
-      # Verifies that the target file was actually modified by the Python script if a commit is recommended.
-      # This step only runs if the script evaluation indicated a potential commit.
-      - name: Check for file changes in ${{ env.TARGET_FILENAME }}
-        if: steps.script_evaluation.outputs.proceed_to_commit == 'true'
-        id: git_diff # Assign an ID to reference its 'outputs' later.
-        run: |
-          # 'git diff --quiet --exit-code' exits 0 if no changes, 1 if changes are found.
-          if git diff --quiet --exit-code ${{ env.TARGET_FILENAME }}; then
-            echo "No content changes detected in ${{ env.TARGET_FILENAME }}."
-            echo "This is unexpected if script recommended a commit (exit 0)."
-            echo "changed=false" >> $GITHUB_OUTPUT
+          echo "Python script exited with outcome: ${{ steps.dice_roll_script.outcome }}"
+          # The script's outcome is 'success' only if it exited with 0.
+          if [[ "${{ steps.dice_roll_script.outcome }}" == "success" ]]; then
+            echo "✅ Script recommended a commit. Proceeding to commit steps."
+            echo "should_commit=true" >> $GITHUB_OUTPUT
+            # Read the generated commit message from the file into an output variable.
+            # This is a robust way to pass multi-line strings between steps.
+            # We use a heredoc to handle multi-line content safely.
+            echo 'commit_message<<EOF' >> $GITHUB_OUTPUT
+            cat ${{ env.COMMIT_MSG_FILENAME }} >> $GITHUB_OUTPUT
+            echo 'EOF' >> $GITHUB_OUTPUT
           else
-            echo "Content changes detected in ${{ env.TARGET_FILENAME }} as expected."
-            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "❌ Script did not recommend a commit or an error occurred. Skipping commit steps."
+            echo "should_commit=false" >> $GITHUB_OUTPUT
+            echo "commit_message=N/A" >> $GITHUB_OUTPUT # Provide a default value
           fi
-        # 'continue-on-error: true' is crucial because 'git diff' exits 1 if changes are found.
-        # We don't want this to mark the step as failed; finding changes is the desired outcome here.
-        continue-on-error: true
 
-      # Step 7: Configure Git User
-      # Sets the Git author and committer information for the commit.
-      # Only runs if a commit is intended AND file changes were detected.
-      - name: Configure Git User for commit
-        if: steps.script_evaluation.outputs.proceed_to_commit == 'true' && steps.git_diff.outputs.changed == 'true'
+      # Step 5: Commit and Push Changes
+      # This step ONLY runs if the evaluation step decided to proceed.
+      # This 'if' condition is the gatekeeper for all git write operations.
+      - name: 5. Commit and push changes
+        if: steps.evaluation.outputs.should_commit == 'true'
         run: |
+          echo "🚀 Starting commit and push process..."
+          # Configure git user for this specific job.
           git config --local user.name "${{ env.GIT_AUTHOR_NAME }}"
           git config --local user.email "${{ env.GIT_AUTHOR_EMAIL }}"
-          echo "Git user configured for this commit: ${{ env.GIT_AUTHOR_NAME }} <${{ env.GIT_AUTHOR_EMAIL }}>"
-
-      # Step 8: Commit and Push Changes
-      # Stages, commits, and pushes the modified file if all conditions are met.
-      - name: Commit and push changes for ${{ env.TARGET_FILENAME }}
-        if: steps.script_evaluation.outputs.proceed_to_commit == 'true' && steps.git_diff.outputs.changed == 'true'
-        run: |
-          echo "Attempting to add, commit, and push changes to ${{ env.TARGET_FILENAME }}."
-          git add ${{ env.TARGET_FILENAME }}
-
-          COMMIT_TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC") # UTC timestamp for the commit message.
-          # Explicitly set the commit author using the --author flag.
-          # The 'git config' in the previous step sets the committer.
-          git commit --author="${{ env.GIT_AUTHOR_NAME }} <${{ env.GIT_AUTHOR_EMAIL }}>" -m "Dice roll log update: ${COMMIT_TIMESTAMP}"
-          echo "Commit created with author '${{ env.GIT_AUTHOR_NAME }} <${{ env.GIT_AUTHOR_EMAIL }}>'."
-
-          # Before pushing, pull remote changes with rebase to avoid push conflicts
-          # if the remote branch was updated since this job started.
-          echo "Attempting to synchronize with remote branch '${{ github.ref_name }}' using pull --rebase..."
-          # 'github.ref_name' provides the name of the current branch (e.g., 'main').
-          if ! git pull --rebase origin ${{ github.ref_name }}; then
-              echo "CRITICAL: 'git pull --rebase origin ${{ github.ref_name }}' failed."
-              echo "This could be due to complex merge conflicts. Manual intervention may be required."
-              exit 1 # Fail the step and job.
+          
+          # Add all potentially changed files.
+          git add ${{ env.LOG_FILENAME }} ${{ env.COMMIT_MSG_FILENAME }}
+          
+          # Before committing, perform a final check. This is a "trust but verify" safety net.
+          # If git status is clean, something is wrong (e.g., script exited 0 but didn't write).
+          if git diff --staged --quiet; then
+            echo "⚠️ WARNING: Script recommended commit, but no file changes were staged. Aborting."
+            # We exit non-zero to fail the job, as this indicates an inconsistent state.
+            exit 1
           fi
-          echo "Synchronization with remote branch successful or branch was already up-to-date."
-
-          # Retry logic for 'git push' to handle transient network issues or brief repository lock contention.
+          
+          echo "Committing with the following message:"
+          echo "--------------------------------------------------"
+          echo "${{ steps.evaluation.outputs.commit_message }}"
+          echo "--------------------------------------------------"
+          
+          # Commit using the message passed from the evaluation step.
+          git commit -F ${{ env.COMMIT_MSG_FILENAME }}
+          
+          # Before pushing, synchronize with the remote branch using rebase.
+          # This minimizes push conflicts if the remote was updated during the run.
+          echo "Syncing with remote branch '${{ github.ref_name }}' using 'pull --rebase'..."
+          git pull --rebase origin ${{ github.ref_name }}
+          
+          # Push changes with a retry loop to handle transient network issues.
           for i in 1 2 3; do
             echo "Push attempt #$i..."
-            if git push origin ${{ github.ref_name }}; then # Explicitly push to origin and the current branch
-              echo "Push successful on attempt #$i!"
-              break # Exit loop on successful push.
+            if git push origin ${{ github.ref_name }}; then
+              echo "✅ Push successful on attempt #$i!"
+              # Set an output for the summary step with the commit SHA.
+              echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+              exit 0 # Success
             fi
-            if [ $i -lt 3 ]; then # If not the last attempt
-              echo "Push attempt #$i failed. Retrying in 20 seconds..."
-              sleep 20 # Wait before retrying.
+            if [ $i -lt 3 ]; then
+              echo "⚠️ Push attempt #$i failed. Retrying in 15 seconds..."
+              sleep 15
             else
-              echo "CRITICAL: All push attempts failed after $i retries."
-              echo "Manual intervention may be required to push changes."
-              exit 1 # Fail the step and job if all pushes fail.
+              echo "❌ CRITICAL: All push attempts failed. Manual intervention required."
+              exit 1 # Failure
             fi
           done
-          echo "Commit and push process completed for ${{ env.TARGET_FILENAME }}."
+        id: commit_step # Give this step an ID to access its outputs.
 
-      # Step 9: Handle "No Commit" Scenario or Script Errors
-      # Provides a clear log message if no commit was made due to script decision,
-      # script error, or no actual file changes.
-      - name: Report if no commit action was taken
-        # This 'if' condition captures all scenarios where a commit should NOT happen.
-        if: steps.script_evaluation.outputs.proceed_to_commit != 'true' || (steps.script_evaluation.outputs.proceed_to_commit == 'true' && steps.git_diff.outputs.changed != 'true')
+      # Step 6: Generate Job Summary
+      # This step runs regardless of the outcome and provides a clean, human-readable
+      # report in the GitHub UI, which is a massive quality-of-life improvement.
+      - name: 6. Generate Job Summary
         run: |
-          echo "No commit action was performed for ${{ env.TARGET_FILENAME }}."
-          if [[ "${{ steps.script_evaluation.outputs.proceed_to_commit }}" != "true" ]]; then
-            echo "Reason: Python script outcome was '${{ steps.dice_roll_script.outcome }}' (did not recommend commit or script error)."
-            echo "Refer to 'Run Dice Roll Committer script' step logs for details from Python."
-          elif [[ "${{ steps.git_diff.outputs.changed }}" != "true" ]]; then
-            # This case: script recommended commit, but no file changes were found.
-            echo "Reason: Script recommended commit, but 'Check for file changes' step found no modifications to ${{ env.TARGET_FILENAME }}."
+          echo "## 🎲 Dice Roll Commit - Job Summary" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "Workflow run triggered at **$(date -u +"%Y-%m-%d %H:%M:%S UTC")**." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Case 1: A commit was successfully made.
+          if [[ "${{ steps.evaluation.outputs.should_commit }}" == "true" && "${{ steps.commit_step.outcome }}" == "success" ]]; then
+            echo "### ✅ Commit Successful" >> $GITHUB_STEP_SUMMARY
+            echo "A new commit was successfully pushed to the repository." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Commit Details:**" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "${{ steps.evaluation.outputs.commit_message }}" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/${{ steps.commit_step.outputs.commit_sha }}"
+            echo "🔗 View commit: [${{ steps.commit_step.outputs.commit_sha }}](${COMMIT_URL})" >> $GITHUB_STEP_SUMMARY
+          
+          # Case 2: No commit was made as per the script's logic.
+          elif [[ "${{ steps.evaluation.outputs.should_commit }}" == "false" ]]; then
+            echo "### ⏩ No Commit Action Taken" >> $GITHUB_STEP_SUMMARY
+            echo "The Python script decided not to make a commit on this run (Exit Code 2)." >> $GITHUB_STEP_SUMMARY
+            echo "This is an expected and clean outcome based on the configured probabilities." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            # You can add more details here if needed by reading a potential 'no-commit-reason.txt' file
+            
+          # Case 3: A failure occurred.
+          else
+            echo "### ❌ Job Failed" >> $GITHUB_STEP_SUMMARY
+            echo "The job failed to complete successfully. Please review the logs for details." >> $GITHUB_STEP_SUMMARY
+            echo "**Last known outcome from script evaluation:** `${{ steps.dice_roll_script.outcome }}`" >> $GITHUB_STEP_SUMMARY
           fi
+        # This step should always run to provide a report, even if prior steps failed.
+        if: always()
