@@ -1,5 +1,3 @@
-\<div align="center"\>
-
 # 🎲 Dice Roll Committer
 
 ### A Production-Ready, Probabilistic Git Committing Engine
