@@ -1,9 +1,9 @@
-chore(automated): Dice roll log update triggered at 2025-08-17T07:22:57+00:00 UTC.
+chore(automated): Dice roll log update triggered at 2025-08-17T08:31:53+00:00 UTC.
 
-Trigger Reason: Success on odd hour 7 UTC.
+Trigger Reason: Success on even hour 8 UTC.
 
 ### Details
-- hour_utc: 7
-- roll: 0.1885
-- threshold: 0.25
+- hour_utc: 8
+- roll: 0.0561
+- threshold: 0.5
 - outcome: success
